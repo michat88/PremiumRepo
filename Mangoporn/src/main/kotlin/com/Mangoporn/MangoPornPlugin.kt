@@ -4,8 +4,8 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
-@Plugin
-class MangoPornPlugin : CloudstreamPlugin() {
+@CloudstreamPlugin
+class MangoPornPlugin : Plugin() {
     override fun load(context: Context) {
         // Mendaftarkan class provider utama kita
         registerMainAPI(MangoPorn())
