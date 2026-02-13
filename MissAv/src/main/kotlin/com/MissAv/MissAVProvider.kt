@@ -1,4 +1,4 @@
-package com.MissAV
+package com.MissAv
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
