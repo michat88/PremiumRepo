@@ -3,7 +3,9 @@ package com.Mangoporn
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import kotlinx.coroutines.* class MangoPorn : MainAPI() {
+import kotlinx.coroutines.* // Wajib import ini
+
+class MangoPorn : MainAPI() {
     override var mainUrl = "https://mangoporn.net"
     override var name = "MangoPorn"
     override val supportedTypes = setOf(TvType.NSFW)
@@ -13,27 +15,14 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
     override val hasQuickSearch = false
 
     // ==============================
-    // 1. MAIN PAGE CONFIGURATION (UPDATED: +11 CATEGORIES)
+    // 1. MAIN PAGE CONFIGURATION
     // ==============================
     override val mainPage = mainPageOf(
         "$mainUrl/movies/" to "Recent Movies",
         "$mainUrl/trending/" to "Trending",
         "$mainUrl/ratings/" to "Top Rated",
         "$mainUrl/genres/porn-movies/" to "Porn Movies",
-        "$mainUrl/xxxclips/" to "XXX Clips",
-        
-        // --- KATEGORI TAMBAHAN ---
-        "$mainUrl/genre/wives/" to "Wives",
-        "$mainUrl/genre/18-teens/" to "18+ Teens",
-        "$mainUrl/genre/milf/" to "MILF",
-        "$mainUrl/genre/anal/" to "Anal",
-        "$mainUrl/genre/asian/" to "Asian",
-        "$mainUrl/genre/lesbian/" to "Lesbian",
-        "$mainUrl/genre/big-boobs/" to "Big Boobs",
-        "$mainUrl/genre/blondes/" to "Blondes",
-        "$mainUrl/genre/cumshots/" to "Cumshots",
-        "$mainUrl/genre/threesomes/" to "Threesomes",
-        "$mainUrl/genre/big-butt/" to "Big Butt"
+        "$mainUrl/xxxclips/" to "XXX Clips"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -62,11 +51,9 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
             imgElement.attr("src") 
         }
 
-        val duration = element.selectFirst("span.duration")?.text()?.trim()
-
+        // ERROR FIX: 'addDuration' dihapus dari sini karena SearchResponse tidak mendukungnya
         return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
-            addDuration(duration)
         }
     }
 
@@ -106,6 +93,7 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
             ActorData(Actor(it.text(), null)) 
         }
 
+        // ERROR FIX: ActorData sudah benar, addDuration bisa dipakai di sini jika perlu (manual assignment)
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
@@ -116,7 +104,7 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 4. LOAD LINKS (OPTIMIZED: STRUCTURED CONCURRENCY)
+    // 4. LOAD LINKS (FIXED PARALLEL)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -128,13 +116,11 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
 
         val potentialLinks = mutableListOf<String>()
 
-        // 1. Ambil dari List Player (#playeroptionsul)
         document.select("#playeroptionsul li a").forEach { link ->
             val href = link.attr("href")
             if (href.startsWith("http")) potentialLinks.add(href)
         }
 
-        // 2. Ambil dari Iframe Fallback (#playcontainer)
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.startsWith("http")) potentialLinks.add(src)
@@ -147,10 +133,8 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
                 url.contains("voe.sx") -> 2
                 url.contains("vidhide") -> 5
                 url.contains("filemoon") -> 6
-                url.contains("player4me") -> 7
                 url.contains("mixdrop") -> 10
                 url.contains("streamsb") -> 11
-                url.contains("lulustream") -> 12
                 else -> 20
             }
         }
@@ -158,15 +142,20 @@ import kotlinx.coroutines.* class MangoPorn : MainAPI() {
         if (potentialLinks.isNotEmpty()) {
             val sortedLinks = potentialLinks.sortedBy { getServerPriority(it) }
 
-            Coroutines.ioSafe {
+            // ERROR FIX: Menggunakan coroutineScope standar + Dispatchers.IO
+            // Ini menggantikan ioSafe yang error
+            coroutineScope {
                 sortedLinks.map { link ->
-                    launch {
+                    // Launch parallel job untuk setiap link
+                    launch(Dispatchers.IO) {
                         try {
                             loadExtractor(link, data, subtitleCallback, callback)
                         } catch (e: Exception) {
+                            // Ignore error per link
                         }
                     }
-                }.joinAll()
+                }
+                // CoroutineScope otomatis menunggu semua child job (launch) selesai
             }
             return true
         }
