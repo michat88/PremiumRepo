@@ -1,7 +1,7 @@
 version = 9
 
 cloudstream {
-    authors     = listOf("luck731")
+    authors     = listOf("aldey84")
     language    = "en"
     description = "Best Japan AV porn site, free forever, high speed, no lag, over 100,000 videos, daily update, no ads while playing video."
 
