@@ -65,12 +65,9 @@ class MissAVProvider : MainAPI() {
     // 3. PENCARIAN (PERBAIKAN DI SINI)
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        // PERBAIKAN: Kita kembali ke URL pencarian standar, bukan legacy.
-        // Cloudstream akan menangani request ini layaknya browser.
         val url = "$mainUrl/search/$query"
         val document = app.get(url).document
         
-        // Kita gunakan selector yang sama dengan homepage karena strukturnya mirip
         return document.select("div.thumbnail.group").mapNotNull { element ->
             toSearchResult(element)
         }
@@ -115,7 +112,7 @@ class MissAVProvider : MainAPI() {
     }
 
     // ==============================
-    // 5. PLAYER (JANGAN DIUBAH - SUDAH PERFECT)
+    // 5. PLAYER + SUBTITLE (DITAMBAHKAN FITUR SUBTITLECAT)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -123,8 +120,11 @@ class MissAVProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val text = app.get(data).text
+        // Kita ambil document agar bisa ambil Judul untuk pencarian subtitle
+        val document = app.get(data).document
+        val text = document.html() // Mengambil raw text untuk regex player
         
+        // 1. Logika Player (Original)
         val regex = """nineyu\.com\\/([0-9a-fA-F-]+)\\/seek""".toRegex()
         val match = regex.find(text)
         
@@ -143,9 +143,57 @@ class MissAVProvider : MainAPI() {
                     this.quality = Qualities.Unknown.value
                 }
             )
+
+            // 2. Logika Subtitle (BARU DITAMBAHKAN)
+            // Mencoba mengambil Kode Video dari Judul (misal: SSIS-669) agar pencarian akurat
+            val title = document.selectFirst("h1.text-base.text-nord6")?.text()?.trim() ?: ""
+            // Regex mencari pola kode umum (Huruf-Angka), contoh: ABC-123
+            val codeRegex = """([A-Za-z]{2,5}-[0-9]{3,5})""".toRegex()
+            val codeMatch = codeRegex.find(title)
+            
+            // Jika ketemu kode (SSIS-123), cari pakai kode. Jika tidak, cari pakai judul full.
+            val query = codeMatch?.value ?: title
+            
+            if (query.isNotBlank()) {
+                fetchSubtitleCat(query, subtitleCallback)
+            }
+            
             return true
         }
 
         return false
+    }
+
+    // ==============================
+    // 6. HELPER SUBTITLE (BARU)
+    // ==============================
+    private suspend fun fetchSubtitleCat(query: String, subtitleCallback: (SubtitleFile) -> Unit) {
+        try {
+            // URL Search SubtitleCat
+            val searchUrl = "https://www.subtitlecat.com/index.php?search=$query"
+            val doc = app.get(searchUrl).document
+
+            // Parsing HTML sesuai data yang diberikan user
+            // Mencari elemen <div class="sub-single">
+            doc.select("div.sub-single").forEach { element ->
+                // Span ke-2 adalah Nama Bahasa (Span ke-1 itu Bendera)
+                val lang = element.select("span").getOrNull(1)?.text()?.trim() ?: "Unknown"
+                
+                // Link download ada di class "green-link"
+                val href = element.selectFirst("a.green-link")?.attr("href") ?: ""
+
+                if (href.isNotEmpty()) {
+                    // Link bersifat relative, tambahkan domain utama
+                    val fullUrl = "https://www.subtitlecat.com$href"
+                    
+                    subtitleCallback.invoke(
+                        SubtitleFile(lang, fullUrl)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            // Error handling diam (silent fail) agar video tetap jalan meski sub gagal
+            e.printStackTrace()
+        }
     }
 }
