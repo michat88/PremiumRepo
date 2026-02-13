@@ -45,7 +45,7 @@ class MangoPorn : MainAPI() {
         val title = titleElement.text().trim()
         val url = titleElement.attr("href")
         
-        // PENTING: Handle Lazy Load WP Fastest Cache (data-wpfc-original-src)
+        // Logika Gambar: Cek lazy load dulu (data-wpfc-original-src), baru src biasa
         val imgElement = element.selectFirst("div.poster img")
         val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
             imgElement.attr("src") 
@@ -72,14 +72,12 @@ class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 3. LOAD DETAIL
+    // 3. LOAD DETAIL (METADATA LENGKAP)
     // ==============================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.s-title")?.text()?.trim() 
-            ?: document.selectFirst("h1")?.text()?.trim() 
-            ?: "Unknown"
+        val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown"
 
         val description = document.selectFirst("div.wp-content p")?.text()?.trim()
         
@@ -88,15 +86,23 @@ class MangoPorn : MainAPI() {
             imgElement.attr("src") 
         }
 
-        val tags = document.select(".sgeneros a").map { it.text() }
+        // Mengambil Tags (Genre)
+        val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
         
-        val year = document.selectFirst("span.date")?.text()?.takeLast(4)?.toIntOrNull()
+        // Mengambil Tahun
+        val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
+        
+        // Mengambil Aktor (Pornstars) yang ada di div #cast
+        val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
+            Actor(it.text(), null) 
+        }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
             this.tags = tags
             this.year = year
+            this.actors = actors
         }
     }
 
@@ -111,56 +117,25 @@ class MangoPorn : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Cek Iframe Langsung (Standard)
-        document.select("iframe").forEach { iframe ->
+        // Berdasarkan HTML detail page: Link ada langsung di dalam <li><a>...</a></li>
+        // Kita targetkan #playeroptionsul (Video Sources)
+        // Kita abaikan Download Sources untuk streaming player agar lebih cepat
+        document.select("#playeroptionsul li a").forEach { link ->
+            val href = link.attr("href")
+            // Filter link kosong atau javascript void
+            if (href.startsWith("http")) {
+                loadExtractor(href, data, subtitleCallback, callback)
+            }
+        }
+
+        // Fallback: Jika ada iframe tersembunyi (misal di header player)
+        document.select("#playcontainer iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.startsWith("http")) {
                 loadExtractor(src, data, subtitleCallback, callback)
             }
         }
 
-        // 2. Cek Dooplay Ajax Player (Multi-server options)
-        val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-        
-        document.select("#playeroptions ul li").forEach { li ->
-            val id = li.attr("data-post")
-            val type = li.attr("data-type")
-            val nume = li.attr("data-nume")
-            
-            if (id.isNotEmpty()) {
-                try {
-                    val response = app.post(
-                        ajaxUrl,
-                        data = mapOf(
-                            "action" to "doo_player_ajax",
-                            "post" to id,
-                            "nume" to nume,
-                            "type" to type
-                        ),
-                        referer = data
-                    ).parsedSafe<DooplayResponse>()
-                    
-                    val embedUrl = response?.embed_url ?: response?.content
-                    if (!embedUrl.isNullOrEmpty()) {
-                        val cleanUrl = if (embedUrl.contains("iframe")) {
-                            embedUrl.substringAfter("src=\"").substringBefore("\"")
-                        } else {
-                            embedUrl
-                        }
-                        loadExtractor(cleanUrl, data, subtitleCallback, callback)
-                    }
-                } catch (e: Exception) {
-                    // Ignore errors
-                }
-            }
-        }
-
         return true
     }
-    
-    data class DooplayResponse(
-        val embed_url: String? = null,
-        val type: String? = null,
-        val content: String? = null
-    )
 }
