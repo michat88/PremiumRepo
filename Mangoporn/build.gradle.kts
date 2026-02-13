@@ -1,7 +1,7 @@
-version = 3
+version = 4
 
 cloudstream {
-    authors     = listOf("HindiProvider")
+    authors     = listOf("AmanHnB")
     language    = "en"
     description = "MangoPorn"
 
