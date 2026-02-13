@@ -45,7 +45,7 @@ class MangoPorn : MainAPI() {
         val title = titleElement.text().trim()
         val url = titleElement.attr("href")
         
-        // Logika Gambar: Cek lazy load dulu (data-wpfc-original-src), baru src biasa
+        // Handle Lazy Load (WP Fastest Cache)
         val imgElement = element.selectFirst("div.poster img")
         val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
             imgElement.attr("src") 
@@ -63,7 +63,10 @@ class MangoPorn : MainAPI() {
     // 2. SEARCH
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=$query"
+        // Fix: Encode query untuk menangani spasi (wife husband -> wife+husband)
+        val fixedQuery = query.replace(" ", "+")
+        
+        val url = "$mainUrl/?s=$fixedQuery"
         val document = app.get(url).document
         
         return document.select("article.item").mapNotNull {
@@ -72,7 +75,7 @@ class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 3. LOAD DETAIL (METADATA LENGKAP)
+    // 3. LOAD DETAIL
     // ==============================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
@@ -86,13 +89,10 @@ class MangoPorn : MainAPI() {
             imgElement.attr("src") 
         }
 
-        // Mengambil Tags (Genre)
         val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
         
-        // Mengambil Tahun
         val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
         
-        // Mengambil Aktor (Pornstars) yang ada di div #cast
         val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
             Actor(it.text(), null) 
         }
@@ -107,7 +107,7 @@ class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 4. LOAD LINKS (PLAYER)
+    // 4. LOAD LINKS
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -117,18 +117,15 @@ class MangoPorn : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Berdasarkan HTML detail page: Link ada langsung di dalam <li><a>...</a></li>
-        // Kita targetkan #playeroptionsul (Video Sources)
-        // Kita abaikan Download Sources untuk streaming player agar lebih cepat
+        // Target Link Langsung di List Player
         document.select("#playeroptionsul li a").forEach { link ->
             val href = link.attr("href")
-            // Filter link kosong atau javascript void
             if (href.startsWith("http")) {
                 loadExtractor(href, data, subtitleCallback, callback)
             }
         }
 
-        // Fallback: Jika ada iframe tersembunyi (misal di header player)
+        // Fallback Iframe
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.startsWith("http")) {
