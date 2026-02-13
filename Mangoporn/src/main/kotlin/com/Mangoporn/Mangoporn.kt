@@ -3,6 +3,7 @@ package com.Mangoporn
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import kotlinx.coroutines.* // Penting untuk fitur Parallel Concurrency
 
 class MangoPorn : MainAPI() {
     override var mainUrl = "https://mangoporn.net"
@@ -53,10 +54,12 @@ class MangoPorn : MainAPI() {
             imgElement.attr("src") 
         }
 
-        // PERBAIKAN: addDuration dihapus karena tidak didukung di SearchResponse Cloudstream saat ini
-        
+        // Kita coba ambil durasi jika ada
+        val duration = element.selectFirst("span.duration")?.text()?.trim()
+
         return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
+            addDuration(duration)
         }
     }
 
@@ -64,8 +67,7 @@ class MangoPorn : MainAPI() {
     // 2. SEARCH
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        // Fix: Encode query space to + (standard WordPress search)
-        // Contoh: "wife husband" -> "wife+husband"
+        // Fix: Encode query space to + (standard WordPress search: ?s=wife+husband)
         val fixedQuery = query.replace(" ", "+")
         
         val url = "$mainUrl/?s=$fixedQuery"
@@ -98,7 +100,7 @@ class MangoPorn : MainAPI() {
         val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
         
         // Mengambil Aktor (Pornstars) yang ada di div #cast
-        // PERBAIKAN: Dibungkus dengan ActorData() agar sesuai tipe data
+        // Wajib dibungkus ActorData agar sesuai tipe data Cloudstream
         val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
             ActorData(Actor(it.text(), null)) 
         }
@@ -113,7 +115,7 @@ class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 4. LOAD LINKS (PLAYER)
+    // 4. LOAD LINKS (OPTIMIZED: STRUCTURED CONCURRENCY)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -123,25 +125,70 @@ class MangoPorn : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // STRATEGI 1: Link Langsung di List Player (#playeroptionsul)
-        // Ini metode paling akurat berdasarkan data HTML terakhir
+        // Kumpulkan semua potensi URL player dalam satu list
+        val potentialLinks = mutableListOf<String>()
+
+        // 1. Ambil dari List Player (#playeroptionsul)
         document.select("#playeroptionsul li a").forEach { link ->
             val href = link.attr("href")
-            // Filter link valid
-            if (href.startsWith("http")) {
-                loadExtractor(href, data, subtitleCallback, callback)
-            }
+            if (href.startsWith("http")) potentialLinks.add(href)
         }
 
-        // STRATEGI 2: Iframe Fallback (Jika tidak ada list opsi)
-        // Kadang player utama ada di dalam iframe #playcontainer
+        // 2. Ambil dari Iframe Fallback (#playcontainer) - Jaga-jaga kalau list kosong
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = iframe.attr("src")
-            if (src.startsWith("http")) {
-                loadExtractor(src, data, subtitleCallback, callback)
+            if (src.startsWith("http")) potentialLinks.add(src)
+        }
+
+        // Definisi Prioritas Server (Angka lebih kecil = Eksekusi duluan)
+        fun getServerPriority(url: String): Int {
+            return when {
+                // Tier 1: Server Cepat & Stabil (Direct/HLS)
+                url.contains("dood") -> 0
+                url.contains("streamtape") -> 1
+                url.contains("voe.sx") -> 2
+                
+                // Tier 2: Server Menengah
+                url.contains("vidhide") -> 5
+                url.contains("filemoon") -> 6
+                url.contains("player4me") -> 7
+                
+                // Tier 3: Server Lambat / Sering Captcha / Iklan Berat
+                url.contains("mixdrop") -> 10
+                url.contains("streamsb") -> 11
+                url.contains("lulustream") -> 12
+                
+                // Tier 4: Default (Lainnya)
+                else -> 20
             }
         }
 
-        return true
+        // --- EKSEKUSI PARALEL PRIORITAS TINGGI ---
+        if (potentialLinks.isNotEmpty()) {
+            // Urutkan link berdasarkan prioritas sebelum diluncurkan ke thread pool
+            // Server prioritas 0 akan masuk antrean eksekusi pertama
+            val sortedLinks = potentialLinks.sortedBy { getServerPriority(it) }
+
+            // Menggunakan ioSafe (Structured Concurrency Wrapper milik Cloudstream)
+            // Ini memastikan thread IO digunakan dan lifecycle terjaga
+            Coroutines.ioSafe {
+                sortedLinks.map { link ->
+                    // Launch setiap link di coroutine terpisah secara paralel
+                    launch {
+                        try {
+                            // Panggil loadExtractor dengan safety try-catch per link
+                            // Jika satu link gagal, dia TIDAK akan membatalkan link lain (Isolation)
+                            loadExtractor(link, data, subtitleCallback, callback)
+                        } catch (e: Exception) {
+                            // Silent fail agar user tidak terganggu notifikasi error internal
+                        }
+                    }
+                }.joinAll() // Tunggu semua "launch" selesai sebelum keluar dari fungsi loadLinks
+                // Ini memastikan "Collect All": kita tidak memotong proses di tengah jalan
+            }
+            return true
+        }
+
+        return false
     }
 }
