@@ -16,21 +16,6 @@ class MissAVProvider : MainAPI() {
         return if (this.startsWith("http")) this else "https://missav.ws$this"
     }
 
-    // Fungsi tambahan untuk memproses durasi (Menggantikan addDuration yang error)
-    private fun parseDuration(duration: String?): Long? {
-        if (duration.isNullOrEmpty()) return null
-        return try {
-            val parts = duration.trim().split(":").map { it.toLong() }
-            when (parts.size) {
-                3 -> (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000L // HH:mm:ss
-                2 -> (parts[0] * 60 + parts[1]) * 1000L // mm:ss
-                else -> null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get(mainUrl).document
         val homePageList = ArrayList<HomePageList>()
@@ -62,13 +47,10 @@ class MissAVProvider : MainAPI() {
         val imgElement = element.selectFirst("img")
         val posterUrl = imgElement?.attr("data-src")?.ifEmpty { imgElement.attr("src") }
         
-        // Ambil teks durasi, misal "2:15:00"
-        val durationText = element.selectFirst("span.absolute.bottom-1.right-1")?.text()?.trim()
-
+        // PERBAIKAN FINAL: Menghapus logika duration yang error
+        // Kita cukup ambil Judul, URL, dan Poster saja agar tidak error
         return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
-            // PERBAIKAN 1: Menggunakan fungsi parseDuration manual dan assign ke this.duration
-            this.duration = parseDuration(durationText)
         }
     }
 
@@ -95,7 +77,6 @@ class MissAVProvider : MainAPI() {
 
         val tags = document.select("div.text-secondary a[href*='/genres/']").map { it.text() }
         
-        // PERBAIKAN 2: Mengubah List<String> menjadi List<ActorData>
         val actors = document.select("div.text-secondary a[href*='/actresses/'], div.text-secondary a[href*='/actors/']")
             .map { element ->
                 ActorData(Actor(element.text(), null))
@@ -103,12 +84,20 @@ class MissAVProvider : MainAPI() {
 
         val year = document.selectFirst("time")?.text()?.trim()?.take(4)?.toIntOrNull()
 
+        // Kita coba ambil durasi dari metadata (dalam detik) jika tersedia di halaman detail
+        val durationSeconds = document.selectFirst("meta[property=og:video:duration]")
+            ?.attr("content")?.toLongOrNull()
+        
+        // Konversi detik ke menit (Cloudstream biasanya pakai menit untuk LoadResponse)
+        val durationMinutes = durationSeconds?.div(60)?.toInt()
+
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
             this.tags = tags
-            this.actors = actors // Sekarang tipe datanya sudah sesuai (List<ActorData>)
+            this.actors = actors
             this.year = year
+            this.duration = durationMinutes 
         }
     }
 
