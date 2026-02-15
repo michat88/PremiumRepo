@@ -25,6 +25,7 @@ class Kuramanime : MainAPI() {
         TvType.OVA
     )
 
+    // User-Agent Desktop (Windows) agar server memberikan HTML lengkap
     private val commonUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     // ================= HELPER FUNCTIONS =================
@@ -42,17 +43,12 @@ class Kuramanime : MainAPI() {
         return this.attr("data-setbg").ifEmpty { this.attr("src") }
     }
 
-    private fun fixTitle(title: String): String {
-        return title.trim()
-    }
-
     // ================= MAIN PAGE & SEARCH =================
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageList = ArrayList<HomePageList>()
 
         // Mengambil Ongoing (Sedang Tayang)
-        // Menggunakan /quick/ongoing karena lebih ringan dan spesifik
         val ongoingDoc = app.get("$mainUrl/quick/ongoing?order_by=latest&page=$page", headers = getHeaders()).document
         val ongoingList = ongoingDoc.select("div.product__item").mapNotNull { it.toSearchResult() }
 
@@ -108,7 +104,6 @@ class Kuramanime : MainAPI() {
             }
         }
 
-        // Mengambil episode dari pagination atau list
         val episodes = ArrayList<Episode>()
         
         // Cek apakah ada pagination episode (Logic dari file referensi)
@@ -123,7 +118,7 @@ class Kuramanime : MainAPI() {
                  })
              }
         } else {
-            // Fallback ke list biasa jika data-content kosong
+            // Fallback ke list biasa
             document.select("#episodeLists a").forEach {
                 val epNum = Regex("Episode\\s+(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
                 episodes.add(newEpisode(it.attr("href")) {
@@ -159,7 +154,7 @@ class Kuramanime : MainAPI() {
         
         // 1. Ambil script 'data-kk' untuk mendapatkan kunci rahasia
         val dataKk = doc.selectFirst("div[data-kk]")?.attr("data-kk") 
-            ?: doc.selectFirst("div.col-lg-12.mt-3")?.attr("data-kk") // Fallback selector
+            ?: doc.selectFirst("div.col-lg-12.mt-3")?.attr("data-kk") // Fallback
             ?: return false
 
         val assets = getAssets(dataKk)
@@ -175,7 +170,6 @@ class Kuramanime : MainAPI() {
             "Referer" to data
         )
 
-        // URL untuk mendapatkan token dinamis
         val tokenUrl = "$mainUrl/${assets.MIX_PREFIX_AUTH_ROUTE_PARAM}${assets.MIX_AUTH_ROUTE_PARAM}"
         val tokenKey = app.get(tokenUrl, headers = headers, cookies = cookies).text
 
@@ -189,18 +183,14 @@ class Kuramanime : MainAPI() {
 
         doc.select("select#changeServer option").forEach { source ->
             val server = source.attr("value")
-            // Skip server kosong atau placeholder
             if (server.isBlank()) return@forEach
 
-            // Construct link rahasia dengan parameter campuran
             val link = "$data?${assets.MIX_PAGE_TOKEN_KEY}=$tokenKey&${assets.MIX_STREAM_SERVER_KEY}=$server"
             
             try {
-                // KuramaDrive butuh penanganan khusus (biasanya direct link)
                 if (server.contains("kuramadrive", true) || server.contains("archive", true)) {
                     invokeLocalSource(link, server, headers, cookies, subtitleCallback, callback)
                 } else {
-                    // Server lain (Sunrong/Filemoon, StreamSB, dll) via iframe
                     val postRes = app.post(
                         link,
                         data = mapOf("authorization" to getAuth()),
@@ -240,15 +230,18 @@ class Kuramanime : MainAPI() {
 
         doc.select("video#player > source").forEach {
             val link = it.attr("src")
-            val quality = it.attr("size").toIntOrNull() ?: Qualities.Unknown.value
+            val qualityInt = it.attr("size").toIntOrNull() ?: Qualities.Unknown.value
+            
+            // PERBAIKAN: Menggunakan lambda initializer untuk parameter quality
             callback.invoke(
                 newExtractorLink(
-                    name,
-                    "$name $server",
-                    link,
-                    INFER_TYPE,
-                    quality
-                )
+                    source = name,
+                    name = "$name $server",
+                    url = link,
+                    type = INFER_TYPE
+                ) {
+                    this.quality = qualityInt
+                }
             )
         }
     }
@@ -266,7 +259,6 @@ class Kuramanime : MainAPI() {
         val jsUrl = "$mainUrl/assets/js/$bpjs.js"
         val env = app.get(jsUrl, headers = mapOf("User-Agent" to commonUserAgent)).text
         
-        // Helper untuk parse variabel JS
         fun getVar(name: String): String {
             return env.substringAfter("$name: '").substringBefore("',")
         }
@@ -282,22 +274,19 @@ class Kuramanime : MainAPI() {
     }
 
     private suspend fun getAuth(): String {
-        return fetchAuth() // Selalu fetch baru agar tidak expired
+        return fetchAuth()
     }
 
     private suspend fun fetchAuth(): String {
-        val url = "$mainUrl/storage/leviathan.js?v=942" // Versi v dari log curl kamu
+        val url = "$mainUrl/storage/leviathan.js?v=942"
         val res = app.get(url, headers = mapOf("User-Agent" to commonUserAgent)).text
         
-        // Logic parsing auth array dari leviathan.js (Sesuai referensi)
         val authMatch = Regex("""=\s*\[(.*?)]""").find(res)
         val authList = authMatch?.groupValues?.get(1)
             ?.split(",")
             ?.map { it.trim().removeSurrounding("'").removeSurrounding("\"") }
             ?: throw ErrorLoadingException("Gagal parse Leviathan Auth")
 
-        // Rekonstruksi token auth (Logic: last + 9 + 1 + first + 'i')
-        // Pastikan array cukup panjang agar tidak crash
         if (authList.size < 10) return "KFhElffuFYZZHAqqBqlGewkwbaaFUtJS" 
 
         return "${authList.last()}${authList[9]}${authList[1]}${authList.first()}i"
@@ -311,7 +300,7 @@ class Kuramanime : MainAPI() {
     }
 }
 
-// ================= CUSTOM EXTRACTORS (Included) =================
+// ================= CUSTOM EXTRACTORS =================
 
 class Sunrong : FilemoonV2() {
     override var mainUrl = "https://sunrong.my.id"
@@ -340,7 +329,6 @@ open class Lbx : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Implementasi Linkbox sederhana jika diperlukan
         callback.invoke(
             newExtractorLink(name, name, url, INFER_TYPE)
         )
