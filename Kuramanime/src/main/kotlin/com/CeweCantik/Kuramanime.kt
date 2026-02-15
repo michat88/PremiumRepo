@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.jsoup.nodes.Element
 
 class Kuramanime : MainAPI() {
     override var mainUrl = "https://v8.kuramanime.blog"
@@ -15,18 +16,17 @@ class Kuramanime : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    // Header "Sakti" dari log CURL kamu
     private val commonHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept" to "application/json, text/javascript, */*; q=0.01", // Minta JSON
-        "X-Requested-With" to "XMLHttpRequest", // Wajib untuk API
+        "Accept" to "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With" to "XMLHttpRequest",
         "Sec-Ch-Ua" to "\"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
         "Sec-Ch-Ua-Mobile" to "?0",
         "Sec-Ch-Ua-Platform" to "\"Linux\""
     )
 
     // ==========================================
-    // DATA CLASSES (Mapping JSON)
+    // DATA CLASSES
     // ==========================================
     data class KuramaResponse(
         @JsonProperty("data") val data: List<KuramaAnime>? = null,
@@ -60,7 +60,7 @@ class Kuramanime : MainAPI() {
     )
 
     // ==========================================
-    // 1. HALAMAN UTAMA (HOME)
+    // 1. HOME
     // ==========================================
     override val mainPage = mainPageOf(
         "$mainUrl/quick/ongoing?order_by=updated&page=" to "Sedang Tayang",
@@ -104,7 +104,7 @@ class Kuramanime : MainAPI() {
     }
 
     // ==========================================
-    // 2. PENCARIAN (SEARCH)
+    // 2. SEARCH
     // ==========================================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/anime?search=$query&order_by=latest&need_json=true"
@@ -115,7 +115,7 @@ class Kuramanime : MainAPI() {
     }
 
     // ==========================================
-    // 3. DETAIL ANIME & EPISODE (LOAD)
+    // 3. LOAD (DETAIL)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
         val jsonUrl = "$url?need_json=true"
@@ -145,9 +145,9 @@ class Kuramanime : MainAPI() {
                 this.posterUrl = poster
                 this.plot = synopsis
                 
-                // PERBAIKAN: Ganti 'rating' (int) dengan 'addRating' (string) agar tidak error
+                // FIX: Menggunakan addScore() menggantikan addRating() yang error
                 if (anime.score != null) {
-                    addRating(anime.score.toString())
+                    addScore(anime.score.toString())
                 }
                 
                 if (episodes.isNotEmpty()) {
@@ -187,7 +187,7 @@ class Kuramanime : MainAPI() {
     }
 
     // ==========================================
-    // 4. LOAD VIDEO
+    // 4. LOAD LINKS
     // ==========================================
     override suspend fun loadLinks(
         data: String,
