@@ -97,8 +97,9 @@ class Kuramanime : MainAPI() {
 
         return newAnimeSearchResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
+            // FIX: Set score langsung menggunakan helper class Score
             if (anime.score != null) {
-                addQuality("⭐ ${anime.score}")
+                this.score = Score.from(anime.score, 10)
             }
         }
     }
@@ -145,9 +146,9 @@ class Kuramanime : MainAPI() {
                 this.posterUrl = poster
                 this.plot = synopsis
                 
-                // FIX: Menggunakan addScore() menggantikan addRating() yang error
+                // FIX: Set score langsung menggunakan helper class Score
                 if (anime.score != null) {
-                    addScore(anime.score.toString())
+                    this.score = Score.from(anime.score, 10)
                 }
                 
                 if (episodes.isNotEmpty()) {
