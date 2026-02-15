@@ -14,6 +14,14 @@ class Kuramanime : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
+    // Helper untuk header agar tidak dianggap bot
+    private fun getHeader(): Map<String, String> {
+        return mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer" to "$mainUrl/"
+        )
+    }
+
     // ==========================================
     // BAGIAN 1: HALAMAN UTAMA (HOME)
     // ==========================================
@@ -26,9 +34,10 @@ class Kuramanime : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = request.data + page
-        val document = app.get(url).document
+        // Tambahkan header saat request
+        val document = app.get(url, headers = getHeader()).document
         
-        // Selector disesuaikan agar lebih spesifik
+        // Selector utama
         val home = document.select("div.filter__gallery > a").mapNotNull { element ->
             toSearchResult(element)
         }
@@ -37,29 +46,24 @@ class Kuramanime : MainAPI() {
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        val title = element.selectFirst("h5.sidebar-title-h5")?.text()?.trim() ?: return null
-        
-        // FIX: Jangan hapus bagian '/episode/' agar load() membuka halaman yang memiliki list episode
+        val title = element.selectFirst("h5")?.text()?.trim() ?: return null
         val href = fixUrl(element.attr("href"))
         
-        // FIX GAMBAR: Mencoba beberapa cara pengambilan gambar agar tidak duplikat/kosong
-        val imageDiv = element.selectFirst(".product__sidebar__view__item")
+        // PERBAIKAN GAMBAR:
+        // Ambil elemen div yang memiliki class 'set-bg' DI DALAM elemen 'a' saat ini
+        val imageDiv = element.selectFirst("div.set-bg")
         var posterUrl = imageDiv?.attr("data-setbg")
-        
-        // Fallback 1: Jika data-setbg kosong, coba cek style background-image
+
+        // Jika data-setbg kosong, coba cari dari style
         if (posterUrl.isNullOrEmpty()) {
             val style = imageDiv?.attr("style") ?: ""
             if (style.contains("url(")) {
-                posterUrl = style.substringAfter("url(").substringBefore(")")
-                    .replace("\"", "").replace("'", "")
+                posterUrl = style.substringAfter("url('").substringBefore("')")
+                    .ifEmpty { style.substringAfter("url(").substringBefore(")") }
             }
         }
-        
-        // Fallback 2: Coba cari tag img di dalam (kadang struktur berubah)
-        if (posterUrl.isNullOrEmpty()) {
-            posterUrl = element.selectFirst("img")?.attr("src")
-        }
 
+        // Eps info
         val epText = element.selectFirst(".ep")?.text()?.trim()
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
@@ -72,7 +76,7 @@ class Kuramanime : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/anime?search=$query&order_by=latest"
-        val document = app.get(url).document
+        val document = app.get(url, headers = getHeader()).document
         return document.select("div.filter__gallery > a").mapNotNull {
             toSearchResult(it)
         }
@@ -82,53 +86,63 @@ class Kuramanime : MainAPI() {
     // BAGIAN 2: DETAIL ANIME & LIST EPISODE
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, headers = getHeader()).document
 
-        // FIX JUDUL: Membersihkan judul dari SEO spam yang terlihat di screenshot
-        // Contoh: "Jujutsu Kaisen ... (Episode 06) Subtitle Indonesia" -> "Jujutsu Kaisen ..."
-        var rawTitle = document.selectFirst("title")?.text() ?: ""
-        if (rawTitle.isEmpty()) {
-            rawTitle = document.select("meta[property=og:title]").attr("content")
-        }
-        
+        // Ambil Judul Bersih
+        val rawTitle = document.select("meta[property=og:title]").attr("content")
         val title = rawTitle
-            .replace(Regex("\\(Episode\\s+\\d+\\).*"), "") // Hapus (Episode XX)...
-            .replace(Regex("Episode\\s+\\d+.*"), "") // Hapus Episode XX...
+            .replace(Regex("\\(Episode\\s+\\d+\\).*"), "")
+            .replace(Regex("Episode\\s+\\d+.*"), "")
             .replace("Subtitle Indonesia", "", true)
             .replace("- Kuramanime", "")
             .trim()
 
         val poster = document.select("meta[property=og:image]").attr("content")
+        val description = document.select("div.content__tags").text() // Mengambil deskripsi dari tags/konten
+            .ifEmpty { document.select("meta[name=description]").attr("content") }
+
+        // PERBAIKAN LIST EPISODE
+        // Kita cari semua link di dalam container episode
+        val episodes = ArrayList<Episode>()
         
-        // Deskripsi (Meta description sering spam keyword, tapi lebih baik daripada kosong)
-        val description = document.select("meta[name=description]").attr("content")
+        // Selector 1: Button episode biasa
+        var epElements = document.select("#animeEpisodes a")
+        
+        // Selector 2 (Cadangan): Jika ID animeEpisodes tidak ketemu, cari class filter gallery
+        if (epElements.isEmpty()) {
+            epElements = document.select(".filter__gallery a[href*='/episode/']")
+        }
 
-        // FIX EPISODE: Mengambil episode dari halaman Watch Page (karena URL tidak kita potong)
-        // Selector: div#animeEpisodes -> a.ep-button
-        val episodes = document.select("#animeEpisodes a.ep-button").mapNotNull { ep ->
+        epElements.forEach { ep ->
             val epUrl = fixUrl(ep.attr("href"))
-            val epName = ep.text().trim() // Contoh: "Ep 6"
+            val epText = ep.text().trim()
             
-            // Ambil angka dari "Ep 6" -> 6
-            val epNum = Regex("(?i)Ep\\s*(\\d+)").find(epName)?.groupValues?.get(1)?.toIntOrNull() 
-                ?: Regex("\\d+").find(epName)?.value?.toIntOrNull()
+            // Logika ekstraksi nomor episode yang lebih kuat
+            val epNum = Regex("(?i)(?:Ep|Episode)\\s*(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull() 
+                ?: Regex("\\d+").find(epText)?.value?.toIntOrNull()
 
-            newEpisode(epUrl) {
-                this.name = epName
-                this.episode = epNum
+            // Hanya masukkan jika URL valid
+            if (epUrl.contains("/episode/")) {
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epText
+                        this.episode = epNum
+                    }
+                )
             }
-        }.reversed()
+        }
+        
+        // Reverse agar episode 1 ada di bawah (urutan nonton yang benar)
+        // Atau biarkan default (terbaru di atas). Biasanya CloudStream suka terbaru di atas.
+        // episodes.reverse() 
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
             
-            // Jika episode ditemukan, tambahkan.
+            // PENTING: Jika list episode kosong, CloudStream akan otomatis menampilkan "Segera Hadir"
             if (episodes.isNotEmpty()) {
                 addEpisodes(DubStatus.Subbed, episodes)
-            } else {
-                // Debugging: Jika kosong, mungkin struktur berubah atau server mendeteksi bot
-                // Tapi harusnya aman karena kita pakai URL halaman nonton
             }
         }
     }
@@ -143,30 +157,38 @@ class Kuramanime : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        val document = app.get(data).document
+        val document = app.get(data, headers = getHeader()).document
         
-        // Ambil server dari dropdown
+        // Cek dropdown server
         val serverOptions = document.select("select#changeServer option")
 
-        serverOptions.forEach { option ->
-            val serverName = option.text()
-            val serverValue = option.attr("value")
-            
-            // Skip server VIP/Premium jika ada
-            if (serverValue.contains("kuramadrive") && serverName.contains("vip", true)) return@forEach
+        if (serverOptions.isNotEmpty()) {
+            serverOptions.forEach { option ->
+                val serverValue = option.attr("value")
+                val serverName = option.text()
 
-            // Request ulang dengan parameter server
-            val serverUrl = "$data?server=$serverValue"
-            
-            try {
-                val serverPage = app.get(serverUrl).document
-                val iframeSrc = serverPage.select("iframe").attr("src")
-                
-                if (iframeSrc.isNotEmpty()) {
-                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                } 
-            } catch (e: Exception) {
-                // Ignore error
+                // Skip yang ribet
+                if (serverName.contains("vip", true)) return@forEach
+
+                // Request ke server URL
+                val serverUrl = "$data?server=$serverValue"
+                try {
+                    val doc = app.get(serverUrl, headers = getHeader()).document
+                    val iframe = doc.select("iframe").attr("src")
+                    if (iframe.isNotBlank()) {
+                        loadExtractor(iframe, data, subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                }
+            }
+        } else {
+            // Fallback: Jika tidak ada dropdown, coba cari iframe langsung di halaman ini
+            document.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotBlank()) {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                }
             }
         }
 
