@@ -81,9 +81,9 @@ open class Lbx : ExtractorApi() {
 }
 
 open class Kuramadrive : ExtractorApi() {
-    override val name = "DriveKurama"
-    override val mainUrl = "https://kuramadrive.com"
-    override val requiresReferer = true
+    override val name = "Kuramadrive"
+    override val mainUrl = "https://v8.kuramanime.blog"
+    override val requiresReferer = false
 
     override suspend fun getUrl(
         url: String,
@@ -91,41 +91,50 @@ open class Kuramadrive : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val req = app.get(url, referer = referer)
-        val doc = req.document
+        // URL format internal kita: https://v8.kuramanime.blog/kuramadrive?pid=123&sid=456
+        val pid = Regex("pid=(\\d+)").find(url)?.groupValues?.get(1) ?: return
+        val sid = Regex("sid=(\\d+)").find(url)?.groupValues?.get(1) ?: return
 
-        val title = doc.select("title").text()
-        val token = doc.select("meta[name=csrf-token]").attr("content")
-        val routeCheckAvl = doc.select("input#routeCheckAvl").attr("value")
+        try {
+            // Request Token Google Drive (Sesuai log user)
+            val json = app.post(
+                "$mainUrl/misc/token/drive-token",
+                headers = mapOf(
+                    "Content-Type" to "application/json",
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Origin" to mainUrl,
+                    "Referer" to "$mainUrl/"
+                ),
+                data = mapOf("pid" to pid, "sid" to sid)
+            ).parsedSafe<DriveTokenResponse>()
 
-        val json = app.get(
-            routeCheckAvl, headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "X-CSRF-TOKEN" to token
-            ),
-            referer = url,
-            cookies = req.cookies
-        ).parsedSafe<Source>()
+            val accessToken = json?.accessToken ?: return
+            val gid = json.gid ?: return // Google Drive File ID
 
-        callback.invoke(
-            newExtractorLink(
-                name,
-                name,
-                json?.url ?: return,
-                INFER_TYPE
-            ) {
-                this.referer = "$mainUrl/"
-                this.quality = getIndexQuality(title)
-            }
-        )
+            // Construct Direct Google API Link
+            val driveUrl = "https://www.googleapis.com/drive/v3/files/$gid?alt=media"
+
+            callback.invoke(
+                newExtractorLink(
+                    name,
+                    name,
+                    driveUrl,
+                    INFER_TYPE
+                ) {
+                    // Masukkan Access Token ke Header
+                    this.headers = mapOf(
+                        "Authorization" to "Bearer $accessToken"
+                    )
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
-    private fun getIndexQuality(str: String?): Int {
-        return Regex("(\\d{3,4})[pP]").find(str ?: "")?.groupValues?.getOrNull(1)?.toIntOrNull()
-            ?: Qualities.Unknown.value
-    }
-
-    private data class Source(
-        @JsonProperty("url") val url: String,
+    data class DriveTokenResponse(
+        @JsonProperty("access_token") val accessToken: String? = null,
+        @JsonProperty("gid") val gid: String? = null
     )
 }
