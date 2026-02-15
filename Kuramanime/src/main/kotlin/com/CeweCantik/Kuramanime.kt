@@ -13,7 +13,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class KuramanimeProvider : MainAPI() {
-    override var mainUrl = "https://v8.kuramanime.blog" // UPDATE: Domain v8
+    override var mainUrl = "https://v8.kuramanime.blog"
     override var name = "Kuramanime"
     override val hasQuickSearch = false
     override val hasMainPage = true
@@ -21,7 +21,6 @@ class KuramanimeProvider : MainAPI() {
     override var sequentialMainPage = true
     override val hasDownloadSupport = true
     
-    // Auth token bisa berubah, kita buat var agar bisa di-update
     var authorization : String? = null 
 
     override val supportedTypes = setOf(
@@ -51,7 +50,7 @@ class KuramanimeProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/anime/ongoing?order_by=updated&page=" to "Sedang Tayang",
         "$mainUrl/anime/finished?order_by=updated&page=" to "Selesai Tayang",
-        "$mainUrl/properties/season/winter-2024?order_by=most_viewed&page=" to "Dilihat Terbanyak Musim Ini", // Update season biar ga jadul
+        "$mainUrl/properties/season/winter-2024?order_by=most_viewed&page=" to "Dilihat Terbanyak Musim Ini",
         "$mainUrl/anime/movie?order_by=updated&page=" to "Film Layar Lebar",
     )
 
@@ -119,7 +118,6 @@ class KuramanimeProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
-        // Mengambil episode, loop page
         for (i in 1..30) {
             val doc = app.get("$url?page=$i").document
             val eps = Jsoup.parse(doc.select("#episodeLists").attr("data-content"))
@@ -165,44 +163,26 @@ class KuramanimeProvider : MainAPI() {
         }
     }
 
+    // Fungsi khusus untuk menangani Kuramadrive (Google Drive API)
     private suspend fun invokeLocalSource(
-        url: String,
-        server: String,
-        headers: Map<String, String>,
+        pid: String,
+        document: org.jsoup.nodes.Document,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.post(
-            url,
-            data = mapOf("authorization" to getAuth()),
-            headers = headers,
-            cookies = cookies
-        ).document
+        // Cari sid (Server ID) di dalam script atau html
+        // Pattern: "sid":"91219" atau sid: "91219" atau data-sid="91219"
+        val html = document.html()
         
-        document.select("video#player > source").map {
-            val link = fixUrl(it.attr("src"))
-            val quality = it.attr("size").toIntOrNull()
-            callback.invoke(
-                newExtractorLink(
-                    fixTitle(server),
-                    fixTitle(server),
-                    link,
-                    INFER_TYPE
-                ) {
-                    this.headers = mapOf(
-                        "Accept" to "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5",
-                        "Range" to "bytes=0-",
-                        "Sec-Fetch-Dest" to "video",
-                        "Sec-Fetch-Mode" to "no-cors",
-                    )
-                    this.quality = quality ?: Qualities.Unknown.value
-                }
-            )
-        }
-        if (server == "kuramadrive") {
-            document.select("div#animeDownloadLink a").amap {
-                loadExtractor(it.attr("href"), "$mainUrl/", subtitleCallback, callback)
-            }
+        // Regex untuk mencari sid di JSON atau Variable JS
+        val sidRegex = Regex("""["']?sid["']?\s*[:=]\s*["']?(\d+)["']?""")
+        val sid = sidRegex.find(html)?.groupValues?.get(1)
+
+        if (pid.isNotEmpty() && !sid.isNullOrEmpty()) {
+            // Kita buat URL palsu untuk ditangkap Extractor "Kuramadrive"
+            // Format: https://v8.kuramanime.blog/kuramadrive?pid=...&sid=...
+            val link = "$mainUrl/kuramadrive?pid=$pid&sid=$sid"
+            loadExtractor(link, "$mainUrl/", subtitleCallback, callback)
         }
     }
 
@@ -217,12 +197,12 @@ class KuramanimeProvider : MainAPI() {
         val res = req.document
         cookies = req.cookies
 
-        val token = res.selectFirst("meta[name=csrf-token]")?.attr("content") ?: return false
-        
-        // PERBAIKAN: Menggunakan selector atribut [data-kk] yang lebih spesifik
-        // HTML: <div class="col-lg-12 mt-3" data-kk="wzl3ClXO8shDECR">
-        val dataKps = res.selectFirst("div[data-kk]")?.attr("data-kk") ?: return false
+        // 1. Ambil PID (Post ID) dari Halaman Utama Episode
+        // HTML: <input type="hidden" id="postId" value="17608">
+        val pid = res.selectFirst("input#postId")?.attr("value") ?: ""
 
+        val token = res.selectFirst("meta[name=csrf-token]")?.attr("content") ?: return false
+        val dataKps = res.selectFirst("div[data-kk]")?.attr("data-kk") ?: return false
         val assets = getAssets(dataKps)
 
         var headers = mapOf(
@@ -233,10 +213,7 @@ class KuramanimeProvider : MainAPI() {
             "X-Requested-With" to "XMLHttpRequest",
         )
 
-        // PERBAIKAN: Ambil script auth dinamis dari HTML input hidden
-        // HTML: <input type="hidden" id="tokenAuthJs" value="/storage/leviathan.js?v=942">
         val authScriptPath = res.selectFirst("#tokenAuthJs")?.attr("value")
-
         val tokenKey = app.get(
             "$mainUrl/${assets.MIX_PREFIX_AUTH_ROUTE_PARAM}${assets.MIX_AUTH_ROUTE_PARAM}",
             headers = headers,
@@ -248,7 +225,6 @@ class KuramanimeProvider : MainAPI() {
             "X-Requested-With" to "XMLHttpRequest",
         )
 
-        // Pastikan authorization token terupdate dengan path script terbaru
         authorization = fetchAuth(authScriptPath)
 
         res.select("select#changeServer option").amap { source ->
@@ -256,17 +232,20 @@ class KuramanimeProvider : MainAPI() {
             val link =
                 "$data?${assets.MIX_PAGE_TOKEN_KEY}=$tokenKey&${assets.MIX_STREAM_SERVER_KEY}=$server"
             
-            if (server.contains(Regex("(?i)kuramadrive|archive"))) {
-                invokeLocalSource(link, server, headers, subtitleCallback, callback)
+            // Request ke server untuk dapatkan Player HTML
+            val postRes = app.post(
+                link,
+                data = mapOf("authorization" to authorization!!),
+                referer = data,
+                headers = headers,
+                cookies = cookies
+            ).document
+
+            if (server.contains("kuramadrive", true)) {
+                // Jika server adalah Kuramadrive, kita pakai logika PID & SID
+                invokeLocalSource(pid, postRes, subtitleCallback, callback)
             } else {
-                val postRes = app.post(
-                    link,
-                    data = mapOf("authorization" to authorization!!),
-                    referer = data,
-                    headers = headers,
-                    cookies = cookies
-                ).document
-                
+                // Server lain (StreamWish, FileLions, dll) biasanya pakai iframe
                 postRes.select("div.iframe-container iframe").attr("src").let { videoUrl ->
                     if(videoUrl.isNotBlank()) {
                          loadExtractor(fixUrl(videoUrl), "$mainUrl/", subtitleCallback, callback)
@@ -303,9 +282,7 @@ class KuramanimeProvider : MainAPI() {
         return authorization ?: fetchAuth(null).also { authorization = it }
     }
 
-    // PERBAIKAN: Fungsi fetchAuth sekarang menerima path opsional
     suspend fun fetchAuth(scriptPath: String?): String {
-        // Jika scriptPath ada (dari HTML), pakai itu. Jika tidak, pakai default (fallback)
         val path = scriptPath ?: "/storage/leviathan.js?v=942" 
         val url = "$mainUrl$path"
         
@@ -313,10 +290,8 @@ class KuramanimeProvider : MainAPI() {
         val auth = Regex("""=\s*\[(.*?)]""").find(res)?.groupValues?.get(1)
             ?.split(",")
             ?.map { it.trim().removeSurrounding("'").removeSurrounding("\"") }
-            ?: throw ErrorLoadingException("Gagal mengambil kunci otorisasi dari $url")
+            ?: throw ErrorLoadingException("Gagal mengambil kunci otorisasi")
 
-        // Logikanya: Ambil elemen terakhir, ke-10, ke-2, ke-1, tambah "i"
-        // Note: Array index mulai dari 0. Jadi elemen ke-9 adalah index 9 (item ke-10).
         return "${auth.last()}${auth[9]}${auth[1]}${auth.first()}i"
     }
 
