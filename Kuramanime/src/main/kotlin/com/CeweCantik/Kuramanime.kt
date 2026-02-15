@@ -1,8 +1,6 @@
 package com.CeweCantik
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
@@ -26,29 +24,6 @@ class Kuramanime : MainAPI() {
     )
 
     // ==========================================
-    // JSON DATA CLASSES
-    // ==========================================
-    data class KuramaResponse(
-        @JsonProperty("data") val data: List<KuramaAnime>? = null,
-        @JsonProperty("ongoingAnimes") val ongoingAnimes: KuramaPage? = null,
-        @JsonProperty("finishedAnimes") val finishedAnimes: KuramaPage? = null,
-        @JsonProperty("movieAnimes") val movieAnimes: KuramaPage? = null,
-    )
-
-    data class KuramaPage(
-        @JsonProperty("data") val data: List<KuramaAnime>? = null
-    )
-
-    data class KuramaAnime(
-        @JsonProperty("id") val id: Int? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("slug") val slug: String? = null,
-        @JsonProperty("image_portrait_url") val imagePortraitUrl: String? = null,
-        @JsonProperty("image_landscape_url") val imageLandscapeUrl: String? = null,
-        @JsonProperty("score") val score: Double? = null,
-    )
-
-    // ==========================================
     // 1. HOME (HTML PARSING)
     // ==========================================
     override val mainPage = mainPageOf(
@@ -62,7 +37,6 @@ class Kuramanime : MainAPI() {
         val url = request.data + page
         val document = app.get(url, headers = commonHeaders).document
         
-        // Parsing HTML (Lebih aman dari error JSON)
         val home = document.select("div.product__sidebar__view__item, .product__item").mapNotNull { element ->
             toSearchResult(element)
         }
@@ -75,7 +49,6 @@ class Kuramanime : MainAPI() {
         val title = linkElement.selectFirst("h5")?.text()?.trim() ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
-        // Ambil gambar
         var posterUrl = element.attr("data-setbg")
         if (posterUrl.isNullOrEmpty()) {
             val style = element.attr("style")
@@ -114,7 +87,10 @@ class Kuramanime : MainAPI() {
     // 3. LOAD (DETAIL ANIME)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = commonHeaders).document
+        // Trik: Selalu gunakan URL episode untuk parsing list episode
+        val fixUrl = if (url.contains("/episode/")) url else "$url/episode/1"
+        
+        val document = app.get(fixUrl, headers = commonHeaders).document
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.replace(Regex("\\(Episode.*\\)"), "")
@@ -125,6 +101,7 @@ class Kuramanime : MainAPI() {
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
         val description = document.selectFirst("meta[name=description]")?.attr("content")
 
+        // Selector Episode (Dikonfirmasi dari audit HTML sebelumnya)
         val episodes = document.select("#animeEpisodes a").mapNotNull { ep ->
             val epUrl = fixUrl(ep.attr("href"))
             val epName = ep.text().trim()
@@ -159,6 +136,8 @@ class Kuramanime : MainAPI() {
     ): Boolean {
         
         val document = app.get(data, headers = commonHeaders).document
+        
+        // 1. Cek Dropdown Server
         val serverOptions = document.select("select#changeServer option")
         
         if (serverOptions.isNotEmpty()) {
@@ -168,18 +147,30 @@ class Kuramanime : MainAPI() {
                 
                 if (serverName.contains("vip", true)) return@forEach
 
+                // Request ke URL server dengan parameter standar
                 val serverUrl = "$data?server=$serverValue"
                 
                 try {
                     val doc = app.get(serverUrl, headers = commonHeaders).document
-                    val iframe = doc.select("iframe").attr("src")
                     
+                    // Cara 1: Cari Iframe Standar
+                    val iframe = doc.select("iframe").attr("src")
                     if (iframe.isNotBlank()) {
                         loadExtractor(iframe, data, subtitleCallback, callback)
                     }
+                    
+                    // Cara 2: Cari Script Embed (untuk server bandel)
+                    // Kadang server disembunyikan dalam variabel JS
+                    val scripts = doc.select("script").html()
+                    val embeddedUrl = Regex("""src\s*=\s*['"]([^'"]+)['"]""").find(scripts)?.groupValues?.get(1)
+                    if (!embeddedUrl.isNullOrEmpty() && embeddedUrl.startsWith("http")) {
+                         loadExtractor(embeddedUrl, data, subtitleCallback, callback)
+                    }
+
                 } catch (e: Exception) {}
             }
         } else {
+            // 2. Fallback: Cari Iframe langsung di halaman ini
             document.select("iframe").forEach { iframe ->
                 val src = iframe.attr("src")
                 if (src.isNotBlank()) {
