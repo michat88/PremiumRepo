@@ -5,9 +5,10 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
+// Tambahkan Import ini agar tidak error "Unresolved reference"
+import com.lagradost.cloudstream3.Qualities
+import com.lagradost.cloudstream3.newExtractorLink
+import com.lagradost.cloudstream3.ExtractorLinkType
 import org.jsoup.nodes.Element
 
 class Kuramanime : MainAPI() {
@@ -19,7 +20,6 @@ class Kuramanime : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    // Header Browser Asli (Penting!)
     private val commonHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -93,7 +93,7 @@ class Kuramanime : MainAPI() {
     // 3. LOAD (DETAIL ANIME)
     // ==========================================
     override suspend fun load(url: String): LoadResponse {
-        // Selalu arahkan ke link episode karena halaman detail info sering kosong
+        // Trik: Selalu gunakan URL episode untuk parsing list episode
         val fixUrl = if (url.contains("/episode/")) url else "$url/episode/1"
         
         val document = app.get(fixUrl, headers = commonHeaders).document
@@ -107,7 +107,6 @@ class Kuramanime : MainAPI() {
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
         val description = document.selectFirst("meta[name=description]")?.attr("content")
 
-        // Mengambil daftar episode
         val episodes = document.select("#animeEpisodes a").mapNotNull { ep ->
             val epUrl = fixUrl(ep.attr("href"))
             val epName = ep.text().trim()
@@ -141,19 +140,17 @@ class Kuramanime : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // Request ke halaman episode
         val document = app.get(data, headers = commonHeaders).document
         
         // -----------------------------------------------------------
         // CARA 1: AMBIL VIDEO LANGSUNG DARI HTML (MP4 DIRECT)
         // -----------------------------------------------------------
-        // Sesuai temuan HTML kamu: <source id="source720" src="..." ...>
         document.select("video#player source").forEach { source ->
             val src = source.attr("src")
             val size = source.attr("size") // Contoh: "720", "480"
             
             if (src.contains(".mp4")) {
-                // FIX: Menggunakan newExtractorLink sesuai ExtractorApi.kt terbaru
+                // FIX: Gunakan newExtractorLink (bukan ExtractorLink) untuk versi terbaru
                 callback.invoke(
                     newExtractorLink(
                         source = name,
@@ -171,7 +168,6 @@ class Kuramanime : MainAPI() {
         // -----------------------------------------------------------
         // CARA 2: AMBIL LINK DOWNLOAD (BACKUP)
         // -----------------------------------------------------------
-        // Kuramanime menyediakan link Pixeldrain, Dropbox, dll di bawah player
         document.select("#animeDownloadLink a").forEach { link ->
             val href = link.attr("href")
             loadExtractor(href, data, subtitleCallback, callback)
@@ -186,7 +182,6 @@ class Kuramanime : MainAPI() {
                 val serverValue = option.attr("value")
                 val serverName = option.text()
                 
-                // Skip Kuramadrive (karena sudah dicover di Cara 1 & 2)
                 if (serverValue.contains("kuramadrive")) return@forEach
 
                 val serverUrl = "$data?server=$serverValue"
