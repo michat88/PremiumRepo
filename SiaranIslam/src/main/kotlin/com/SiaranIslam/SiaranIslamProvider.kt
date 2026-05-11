@@ -36,7 +36,7 @@ class SiaranIslamProvider : MainAPI() {
                 // Mengambil nama channel (teks setelah tanda koma terakhir)
                 currentName = trimmed.substringAfterLast(",").trim()
                 
-                // Mengambil link logo jika ada
+                // Mengambil link logo jika ada (menggunakan Regex)
                 val logoRegex = """tvg-logo="([^"]+)"""".toRegex()
                 currentLogo = logoRegex.find(trimmed)?.groupValues?.get(1) ?: ""
                 
@@ -62,7 +62,7 @@ class SiaranIslamProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // Opsional: Kamu bisa membuat fitur pencarian di sini nanti
+        // Opsional: Dikosongkan dulu karena kita fokus ke Live TV
         return emptyList()
     }
 
@@ -75,22 +75,28 @@ class SiaranIslamProvider : MainAPI() {
         )
     }
 
-    // Melemparkan URL streaming ke pemutar video (ExoPlayer)
+    // Melemparkan URL streaming ke pemutar video (ExoPlayer) menggunakan DSL Builder baru
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        
+        // Menentukan tipe otomatis berdasarkan URL (.m3u8 atau .mp4)
+        val linkType = if (data.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+
+        // Menggunakan newExtractorLink sesuai aturan terbaru ExtractorApi.kt
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
                 name = this.name,
                 url = data,
-                referer = "",
-                quality = Qualities.Unknown.value,
-                isM3u8 = data.contains(".m3u8") // Deteksi otomatis jika formatnya m3u8
-            )
+                type = linkType
+            ) {
+                this.quality = Qualities.Unknown.value
+                this.referer = ""
+            }
         )
         return true
     }
