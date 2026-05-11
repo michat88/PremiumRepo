@@ -44,7 +44,7 @@ subprojects {
         namespace = "com.phisher98"
 
         defaultConfig {
-            minSdk = 21
+            minSdk = 22
             compileSdkVersion(35)
             targetSdk = 35
 
