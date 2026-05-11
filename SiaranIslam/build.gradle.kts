@@ -20,7 +20,7 @@ cloudstream {
     tvTypes = listOf(
         "TvSeries",
         "Movie",
-        "Anime",
+        "Live",
         "AsianDrama",
     )
     isCrossPlatform = false
