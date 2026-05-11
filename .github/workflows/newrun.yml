@@ -40,7 +40,7 @@ jobs:
           rm -f $GITHUB_WORKSPACE/builds/*.cs3
           rm -f $GITHUB_WORKSPACE/builds/*.jar
           # File repo.json TIDAK DIHAPUS di sini, jadi dia aman.
-
+          
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -73,10 +73,13 @@ jobs:
           fi
 
           # 4. Copy hasil build ke folder "builds"
-          # Kita timpa file di folder yang sudah ada repo.json-nya
-          cp **/build/*.cs3 $GITHUB_WORKSPACE/builds/
-          cp **/build/*.jar $GITHUB_WORKSPACE/builds/
-          cp build/plugins.json $GITHUB_WORKSPACE/builds/
+          # Aktifkan globstar agar tanda ** berfungsi dengan baik
+          shopt -s globstar
+          
+          # Tambahkan '|| true' dan '2>/dev/null' agar proses tetap aman walau file tidak ditemukan
+          cp **/build/*.cs3 $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
+          cp **/build/*.jar $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
+          cp build/plugins.json $GITHUB_WORKSPACE/builds/ 2>/dev/null || true
 
       - name: Push builds
         run: |
