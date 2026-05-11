@@ -1,0 +1,9 @@
+{
+    "name": "SiaranIslam",
+    "iconUrl": "https://raw.githubusercontent.com/michat88/Zaneta/main/Icons/Adi.png",
+    "description": "Repository Plugin Michat88",
+    "manifestVersion": 1,
+    "pluginLists": [
+      "https://raw.githubusercontent.com/michat88/SiaranIslam/builds/plugins.json"
+    ]
+}

@@ -1,0 +1,24 @@
+[
+    {
+        "iconUrl": "https://www.dramabox.com/images/logo.png",
+        "fileHash": "sha256-760a368f08cd54e029cee398aa55705a6f8f917ba3ad4c7b7f75d2de60aa02a6",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/michat88/SiaranIslam",
+        "fileSize": 8021,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "AdiManu"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Live",
+            "AsianDrama"
+        ],
+        "version": 34,
+        "internalName": "SiaranIslam",
+        "url": "https://raw.githubusercontent.com/michat88/SiaranIslam/builds/SiaranIslam.cs3",
+        "name": "SiaranIslam"
+    }
+]
